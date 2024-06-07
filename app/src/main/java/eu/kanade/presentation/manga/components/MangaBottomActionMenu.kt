@@ -8,7 +8,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,12 +32,12 @@ import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.RemoveDone
 import androidx.compose.material.icons.outlined.SwapCalls
-import androidx.compose.material.ripple
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -90,7 +89,7 @@ fun MangaBottomActionMenu(
         Surface(
             modifier = modifier,
             shape = MaterialTheme.shapes.large.copy(bottomEnd = ZeroCornerSize, bottomStart = ZeroCornerSize),
-            tonalElevation = 3.dp,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
             val haptic = LocalHapticFeedback.current
             val confirm = remember { mutableStateListOf(false, false, false, false, false, false, false) }
@@ -199,7 +198,7 @@ private fun RowScope.Button(
             .size(48.dp)
             .weight(animatedWeight)
             .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = null,
                 indication = ripple(bounded = false),
                 onLongClick = onLongClick,
                 onClick = onClick,
@@ -239,6 +238,7 @@ fun LibraryBottomActionMenu(
     onClickCleanTitles: (() -> Unit)?,
     onClickMigrate: (() -> Unit)?,
     onClickAddToMangaDex: (() -> Unit)?,
+    onClickResetInfo: (() -> Unit)?,
     // SY <--
     modifier: Modifier = Modifier,
 ) {
@@ -251,7 +251,7 @@ fun LibraryBottomActionMenu(
         Surface(
             modifier = modifier,
             shape = MaterialTheme.shapes.large.copy(bottomEnd = ZeroCornerSize, bottomStart = ZeroCornerSize),
-            tonalElevation = 3.dp,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
             val haptic = LocalHapticFeedback.current
             val confirm =
@@ -267,7 +267,7 @@ fun LibraryBottomActionMenu(
                 }
             }
             // SY -->
-            val showOverflow = onClickCleanTitles != null || onClickAddToMangaDex != null
+            val showOverflow = onClickCleanTitles != null || onClickAddToMangaDex != null || onClickResetInfo != null
             val configuration = LocalConfiguration.current
             val moveMarkPrev = remember { !configuration.isTabletUi() }
             var overFlowOpen by remember { mutableStateOf(false) }
@@ -362,6 +362,12 @@ fun LibraryBottomActionMenu(
                             DropdownMenuItem(
                                 text = { Text(stringResource(SYMR.strings.mangadex_add_to_follows)) },
                                 onClick = onClickAddToMangaDex,
+                            )
+                        }
+                        if (onClickResetInfo != null) {
+                            DropdownMenuItem(
+                                text = { Text(text = stringResource(SYMR.strings.reset_info)) },
+                                onClick = onClickResetInfo,
                             )
                         }
                     }

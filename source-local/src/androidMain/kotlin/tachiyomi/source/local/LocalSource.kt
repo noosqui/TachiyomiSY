@@ -1,6 +1,7 @@
 package tachiyomi.source.local
 
 import android.content.Context
+import android.os.Build
 import com.hippo.unifile.UniFile
 import eu.kanade.tachiyomi.source.CatalogueSource
 import eu.kanade.tachiyomi.source.Source
@@ -11,31 +12,31 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.util.lang.compareToCaseInsensitiveNaturalOrder
 import eu.kanade.tachiyomi.util.storage.CbzCrypto
-import eu.kanade.tachiyomi.util.storage.CbzCrypto.addStreamToZip
-import eu.kanade.tachiyomi.util.storage.CbzCrypto.getCoverStreamFromZip
-import eu.kanade.tachiyomi.util.storage.CbzCrypto.getZipInputStream
-import eu.kanade.tachiyomi.util.storage.CbzCrypto.isEncryptedZip
 import eu.kanade.tachiyomi.util.storage.EpubFile
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromStream
-import kotlinx.serialization.json.encodeToStream
 import logcat.LogPriority
 import nl.adaptivity.xmlutil.AndroidXmlReader
 import nl.adaptivity.xmlutil.serialization.XML
 import tachiyomi.core.common.i18n.stringResource
-import tachiyomi.core.metadata.comicinfo.COMIC_INFO_FILE
-import tachiyomi.core.metadata.comicinfo.ComicInfo
-import tachiyomi.core.metadata.comicinfo.copyFromComicInfo
-import tachiyomi.core.metadata.comicinfo.getComicInfo
-import tachiyomi.core.metadata.tachiyomi.MangaDetails
 import tachiyomi.core.common.storage.UniFileTempFileManager
+import tachiyomi.core.common.storage.addStreamToZip
 import tachiyomi.core.common.storage.extension
+import tachiyomi.core.common.storage.getCoverStreamFromZip
+import tachiyomi.core.common.storage.getZipInputStream
+import tachiyomi.core.common.storage.isEncryptedZip
 import tachiyomi.core.common.storage.nameWithoutExtension
 import tachiyomi.core.common.util.lang.withIOContext
 import tachiyomi.core.common.util.system.ImageUtil
 import tachiyomi.core.common.util.system.logcat
+import tachiyomi.core.metadata.comicinfo.COMIC_INFO_FILE
+import tachiyomi.core.metadata.comicinfo.ComicInfo
+import tachiyomi.core.metadata.comicinfo.ComicInfoPublishingStatus
+import tachiyomi.core.metadata.comicinfo.copyFromComicInfo
+import tachiyomi.core.metadata.comicinfo.getComicInfo
+import tachiyomi.core.metadata.tachiyomi.MangaDetails
 import tachiyomi.domain.chapter.service.ChapterRecognition
 import tachiyomi.domain.manga.model.Manga
 import tachiyomi.i18n.MR
@@ -156,17 +157,39 @@ actual class LocalSource(
 
     // SY -->
     fun updateMangaInfo(manga: SManga) {
-        val existingFile = fileSystem.getFilesInMangaDirectory(manga.url).find { it.extension == "json" }
-        val file = existingFile
-            ?: fileSystem.getMangaDirectory(manga.url)?.createFile("info.json")
-            ?: return
-        file.openOutputStream().use {
-            json.encodeToStream(manga.toJson(), it)
+        val mangaDirFiles = fileSystem.getFilesInMangaDirectory(manga.url)
+        val existingFile = mangaDirFiles
+            .firstOrNull { it.name == COMIC_INFO_FILE }
+        val comicInfoArchiveFile = mangaDirFiles
+            .firstOrNull { it.name == COMIC_INFO_ARCHIVE }
+        val existingComicInfo = (existingFile?.openInputStream() ?: comicInfoArchiveFile?.getZipInputStream(COMIC_INFO_FILE))?.use {
+            AndroidXmlReader(it, StandardCharsets.UTF_8.name()).use {
+                xml.decodeFromReader<ComicInfo>(it)
+            }
         }
-    }
+        val newComicInfo = if (existingComicInfo != null) {
+            manga.run {
+                existingComicInfo.copy(
+                    series = ComicInfo.Series(title),
+                    summary = description?.let { ComicInfo.Summary(it) },
+                    writer = author?.let { ComicInfo.Writer(it) },
+                    penciller = artist?.let { ComicInfo.Penciller(it) },
+                    genre = genre?.let { ComicInfo.Genre(it) },
+                    publishingStatus = ComicInfo.PublishingStatusTachiyomi(
+                        ComicInfoPublishingStatus.toComicInfoValue(status.toLong()),
+                    ),
+                )
+            }
+        } else {
+            manga.getComicInfo()
+        }
 
-    private fun SManga.toJson(): MangaDetails {
-        return MangaDetails(title, author, artist, description, genre?.split(", "), status)
+        fileSystem.getMangaDirectory(manga.url)?.let {
+            copyComicInfoFile(
+                xml.encodeToString(ComicInfo.serializer(), newComicInfo).byteInputStream(),
+                it
+            )
+        }
     }
     // SY <--
 
@@ -268,7 +291,13 @@ actual class LocalSource(
                     }
                 }
                 is Format.Rar -> {
-                    JunrarArchive(tempFileManager.createTempFile(chapter)).use { rar ->
+                    val archive = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+                        JunrarArchive(tempFileManager.createTempFile(chapter))
+                    } else {
+                        JunrarArchive(chapter.openInputStream())
+                    }
+
+                    archive.use { rar ->
                         rar.fileHeaders.firstOrNull { it.fileName == COMIC_INFO_FILE }?.let { comicInfoFile ->
                             rar.getInputStream(comicInfoFile).buffered().use { stream ->
                                 return copyComicInfoFile(stream, folder)
@@ -330,7 +359,7 @@ actual class LocalSource(
 
                     val format = Format.valueOf(chapterFile)
                     if (format is Format.Epub) {
-                        EpubFile(tempFileManager.createTempFile(format.file)).use { epub ->
+                        EpubFile(format.file, context).use { epub ->
                             epub.fillMetadata(manga, this)
                         }
                     }
@@ -361,8 +390,8 @@ actual class LocalSource(
         try {
             val (mangaDirName, chapterName) = chapter.url.split('/', limit = 2)
             return fileSystem.getBaseDirectory()
-                ?.findFile(mangaDirName, true)
-                ?.findFile(chapterName, true)
+                ?.findFile(mangaDirName)
+                ?.findFile(chapterName)
                 ?.let(Format.Companion::valueOf)
                 ?: throw Exception(context.stringResource(MR.strings.chapter_not_found))
         } catch (e: Format.UnknownFormatException) {
@@ -397,10 +426,15 @@ actual class LocalSource(
                             format.file.isEncryptedZip()
                         )
                     }
-                    // SY <--
                 }
                 is Format.Rar -> {
-                    JunrarArchive(tempFileManager.createTempFile(format.file)).use { archive ->
+                    val rarArchive = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+                        JunrarArchive(tempFileManager.createTempFile(format.file))
+                    } else {
+                        JunrarArchive(format.file.openInputStream())
+                    }
+                    rarArchive.use { archive ->
+                        // SY <--
                         val entry = archive.fileHeaders
                             .sortedWith { f1, f2 -> f1.fileName.compareToCaseInsensitiveNaturalOrder(f2.fileName) }
                             .find { !it.isDirectory && ImageUtil.isImage(it.fileName) { archive.getInputStream(it) } }
@@ -409,15 +443,17 @@ actual class LocalSource(
                     }
                 }
                 is Format.Epub -> {
-                    EpubFile(tempFileManager.createTempFile(format.file)).use { epub ->
-                        val entry = epub.getImagesFromPages()
-                            .firstOrNull()
-                            ?.let { epub.getEntry(it) }
+                    // SY -->
+                        EpubFile(format.file, context).use { epub ->
+                            // SY <--
+                            val entry = epub.getImagesFromPages()
+                                .firstOrNull()
+                                ?.let { epub.getEntry(it) }
 
-                        entry?.let { coverManager.update(manga, epub.getInputStream(it)) }
+                            entry?.let { coverManager.update(manga, epub.getInputStream(it)) }
+                        }
                     }
                 }
-            }
         } catch (e: Throwable) {
             logcat(LogPriority.ERROR, e) { "Error updating cover for ${manga.title}" }
             null

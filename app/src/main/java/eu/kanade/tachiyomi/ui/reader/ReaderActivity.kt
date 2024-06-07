@@ -47,6 +47,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.davemorrissey.labs.subscaleview.SubsamplingScaleImageView
 import com.google.android.material.elevation.SurfaceColors
 import com.google.android.material.transition.platform.MaterialContainerTransform
+import com.hippo.unifile.UniFile
 import dev.chrisbanes.insetter.applyInsetter
 import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.manga.model.readingMode
@@ -61,6 +62,7 @@ import eu.kanade.presentation.reader.appbars.NavBarType
 import eu.kanade.presentation.reader.appbars.ReaderAppBars
 import eu.kanade.presentation.reader.settings.ReaderSettingsDialog
 import eu.kanade.tachiyomi.R
+import eu.kanade.tachiyomi.data.coil.TachiyomiImageDecoder
 import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.databinding.ReaderActivityBinding
@@ -91,6 +93,7 @@ import eu.kanade.tachiyomi.util.system.toShareIntent
 import eu.kanade.tachiyomi.util.system.toast
 import eu.kanade.tachiyomi.util.view.setComposeContent
 import exh.source.isEhBasedSource
+import exh.ui.ifSourcesLoaded
 import exh.util.defaultReaderType
 import exh.util.mangaType
 import kotlinx.collections.immutable.persistentSetOf
@@ -122,6 +125,7 @@ import tachiyomi.i18n.sy.SYMR
 import tachiyomi.presentation.core.util.collectAsState
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import java.io.ByteArrayOutputStream
 import kotlin.time.Duration.Companion.seconds
 
 class ReaderActivity : BaseActivity() {
@@ -389,6 +393,10 @@ class ReaderActivity : BaseActivity() {
                     onChangeReadingMode = viewModel::setMangaReadingMode,
                     onChangeOrientation = viewModel::setMangaOrientationType,
                 )
+            }
+
+            if (!ifSourcesLoaded()) {
+                return@setComposeContent
             }
 
             val isHttpSource = viewModel.getSource() is HttpSource
@@ -1192,8 +1200,8 @@ class ReaderActivity : BaseActivity() {
                 }
                 .launchIn(lifecycleScope)
 
-            readerPreferences.trueColor().changes()
-                .onEach(::setTrueColor)
+            preferences.displayProfile().changes()
+                .onEach { setDisplayProfile(it) }
                 .launchIn(lifecycleScope)
 
             readerPreferences.cutoutShort().changes()
@@ -1261,13 +1269,21 @@ class ReaderActivity : BaseActivity() {
         }
 
         /**
-         * Sets the 32-bit color mode according to [enabled].
+         * Sets the display profile to [path].
          */
-        private fun setTrueColor(enabled: Boolean) {
-            if (enabled) {
-                SubsamplingScaleImageView.setPreferredBitmapConfig(Bitmap.Config.ARGB_8888)
-            } else {
-                SubsamplingScaleImageView.setPreferredBitmapConfig(Bitmap.Config.RGB_565)
+        private fun setDisplayProfile(path: String) {
+            val file = UniFile.fromUri(baseContext, path.toUri())
+            if (file != null && file.exists()) {
+                val inputStream = file.openInputStream()
+                val outputStream = ByteArrayOutputStream()
+                inputStream.use { input ->
+                    outputStream.use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                val data = outputStream.toByteArray()
+                SubsamplingScaleImageView.setDisplayProfile(data)
+                TachiyomiImageDecoder.displayProfile = data
             }
         }
 
